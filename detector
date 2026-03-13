@@ -1,0 +1,191 @@
+# models/detector.py
+"""
+Deepfake detector model supporting EfficientNet-B4, Xception, and ResNet18
+via transfer learning with configurable fine-tuning strategies.
+"""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import models
+from typing import Optional, Tuple
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+#  Attention module (channel + spatial)                                         #
+# --------------------------------------------------------------------------- #
+
+class CBAM(nn.Module):
+    """Convolutional Block Attention Module."""
+
+    def __init__(self, channels: int, reduction: int = 16):
+        super().__init__()
+        self.channel_attention = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channels // reduction, channels, bias=False),
+            nn.Sigmoid(),
+        )
+        self.spatial_attention = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Channel attention
+        ca = self.channel_attention(x).view(x.size(0), x.size(1), 1, 1)
+        x = x * ca
+        # Spatial attention
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        sa = self.spatial_attention(torch.cat([avg_out, max_out], dim=1))
+        return x * sa
+
+
+# --------------------------------------------------------------------------- #
+#  Classification head                                                          #
+# --------------------------------------------------------------------------- #
+
+class ClassificationHead(nn.Module):
+    def __init__(self, in_features: int, num_classes: int = 2, dropout: float = 0.3):
+        super().__init__()
+        self.head = nn.Sequential(
+            nn.Linear(in_features, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(512, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout / 2),
+            nn.Linear(128, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.head(x)
+
+
+# --------------------------------------------------------------------------- #
+#  EfficientNet-B4 detector                                                     #
+# --------------------------------------------------------------------------- #
+
+class EfficientNetDetector(nn.Module):
+    """EfficientNet-B4 with CBAM attention for deepfake detection."""
+
+    def __init__(self, num_classes: int = 2, pretrained: bool = True, dropout: float = 0.3):
+        super().__init__()
+        import timm
+
+        self.backbone = timm.create_model(
+            "efficientnet_b4", pretrained=pretrained, num_classes=0, global_pool=""
+        )
+        feature_dim = self.backbone.num_features  # 1792
+
+        self.attention = CBAM(feature_dim)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.head = ClassificationHead(feature_dim, num_classes, dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        features = self.backbone.forward_features(x)
+        features = self.attention(features)
+        features = self.pool(features).flatten(1)
+        return self.head(features)
+
+    def freeze_backbone(self, n_layers: int = 0):
+        """Freeze the first n_layers of backbone for staged fine-tuning."""
+        params = list(self.backbone.parameters())
+        for p in params[:n_layers]:
+            p.requires_grad = False
+
+
+# --------------------------------------------------------------------------- #
+#  Xception detector                                                            #
+# --------------------------------------------------------------------------- #
+
+class XceptionDetector(nn.Module):
+    """Xception via timm with a custom head."""
+
+    def __init__(self, num_classes: int = 2, pretrained: bool = True, dropout: float = 0.3):
+        super().__init__()
+        import timm
+
+        self.backbone = timm.create_model(
+            "xception", pretrained=pretrained, num_classes=0, global_pool="avg"
+        )
+        feature_dim = self.backbone.num_features  # 2048
+        self.head = ClassificationHead(feature_dim, num_classes, dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        features = self.backbone(x)
+        return self.head(features)
+
+    def freeze_backbone(self, n_layers: int = 0):
+        params = list(self.backbone.parameters())
+        for p in params[:n_layers]:
+            p.requires_grad = False
+
+
+# --------------------------------------------------------------------------- #
+#  ResNet-18 detector (lightweight baseline)                                    #
+# --------------------------------------------------------------------------- #
+
+class ResNet18Detector(nn.Module):
+    """ResNet-18 baseline for quick experiments."""
+
+    def __init__(self, num_classes: int = 2, pretrained: bool = True, dropout: float = 0.3):
+        super().__init__()
+        weights = models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+        base = models.resnet18(weights=weights)
+        feature_dim = base.fc.in_features  # 512
+        self.backbone = nn.Sequential(*list(base.children())[:-2])
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.head = ClassificationHead(feature_dim, num_classes, dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        features = self.backbone(x)
+        features = self.pool(features).flatten(1)
+        return self.head(features)
+
+    def freeze_backbone(self, n_layers: int = 0):
+        params = list(self.backbone.parameters())
+        for p in params[:n_layers]:
+            p.requires_grad = False
+
+
+# --------------------------------------------------------------------------- #
+#  Factory                                                                      #
+# --------------------------------------------------------------------------- #
+
+ARCHITECTURES = {
+    "efficientnet_b4": EfficientNetDetector,
+    "xception": XceptionDetector,
+    "resnet18": ResNet18Detector,
+}
+
+
+def build_model(
+    architecture: str = "efficientnet_b4",
+    num_classes: int = 2,
+    pretrained: bool = True,
+    dropout: float = 0.3,
+) -> nn.Module:
+    arch = architecture.lower()
+    if arch not in ARCHITECTURES:
+        raise ValueError(f"Unknown architecture '{arch}'. Choose from: {list(ARCHITECTURES)}")
+    model = ARCHITECTURES[arch](num_classes=num_classes, pretrained=pretrained, dropout=dropout)
+    n_params = sum(p.numel() for p in model.parameters()) / 1e6
+    logger.info(f"Built {arch} model with {n_params:.1f}M parameters.")
+    return model
+
+
+def load_checkpoint(model: nn.Module, checkpoint_path: str, device: str = "cpu") -> nn.Module:
+    """Load model weights from a checkpoint file."""
+    ckpt = torch.load(checkpoint_path, map_location=device)
+    state_dict = ckpt.get("model_state_dict", ckpt)
+    model.load_state_dict(state_dict, strict=False)
+    logger.info(f"Loaded checkpoint from {checkpoint_path}")
+    return model
