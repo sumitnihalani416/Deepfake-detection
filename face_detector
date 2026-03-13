@@ -1,0 +1,173 @@
+# utils/face_detector.py
+"""
+Face detection using MTCNN (facenet-pytorch) or RetinaFace.
+Supports batch processing for efficiency.
+"""
+
+import cv2
+import numpy as np
+import torch
+from PIL import Image
+from typing import List, Optional, Tuple, Union
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class MTCNNDetector:
+    """MTCNN-based face detector using facenet-pytorch."""
+
+    def __init__(
+        self,
+        min_face_size: int = 40,
+        thresholds: Tuple[float, float, float] = (0.6, 0.7, 0.8),
+        factor: float = 0.709,
+        device: Optional[str] = None,
+        margin: float = 0.3,
+    ):
+        from facenet_pytorch import MTCNN
+
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = device
+        self.margin_ratio = margin
+
+        self.detector = MTCNN(
+            min_face_size=min_face_size,
+            thresholds=list(thresholds),
+            factor=factor,
+            keep_all=True,
+            device=device,
+            post_process=False,
+        )
+        logger.info(f"MTCNN detector initialized on {device}")
+
+    def detect(
+        self, frame: np.ndarray, face_size: Tuple[int, int] = (224, 224)
+    ) -> List[np.ndarray]:
+        """
+        Detect and crop faces from a BGR frame.
+
+        Returns list of face crops as RGB numpy arrays (H, W, 3).
+        """
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(rgb)
+
+        try:
+            boxes, probs = self.detector.detect(pil_img)
+        except Exception as e:
+            logger.debug(f"MTCNN detection error: {e}")
+            return []
+
+        if boxes is None or len(boxes) == 0:
+            return []
+
+        h, w = frame.shape[:2]
+        faces = []
+
+        for box, prob in zip(boxes, probs):
+            if prob is None or prob < 0.9:
+                continue
+
+            x1, y1, x2, y2 = box.astype(int)
+            bw, bh = x2 - x1, y2 - y1
+            margin_x = int(bw * self.margin_ratio)
+            margin_y = int(bh * self.margin_ratio)
+
+            x1 = max(0, x1 - margin_x)
+            y1 = max(0, y1 - margin_y)
+            x2 = min(w, x2 + margin_x)
+            y2 = min(h, y2 + margin_y)
+
+            face_crop = rgb[y1:y2, x1:x2]
+            if face_crop.size == 0:
+                continue
+
+            face_resized = cv2.resize(face_crop, face_size)
+            faces.append(face_resized)
+
+        return faces
+
+    def detect_batch(
+        self, frames: List[np.ndarray], face_size: Tuple[int, int] = (224, 224)
+    ) -> List[List[np.ndarray]]:
+        """Detect faces in a batch of frames."""
+        return [self.detect(f, face_size) for f in frames]
+
+
+class RetinaFaceDetector:
+    """RetinaFace-based face detector."""
+
+    def __init__(self, margin: float = 0.3, device: Optional[str] = None):
+        try:
+            from retinaface import RetinaFace as RF
+            self._RF = RF
+        except ImportError:
+            raise ImportError("Install retinaface: pip install retinaface")
+
+        self.margin_ratio = margin
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = device
+        logger.info("RetinaFace detector initialized")
+
+    def detect(
+        self, frame: np.ndarray, face_size: Tuple[int, int] = (224, 224)
+    ) -> List[np.ndarray]:
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w = frame.shape[:2]
+
+        try:
+            result = self._RF.detect_faces(rgb)
+        except Exception as e:
+            logger.debug(f"RetinaFace detection error: {e}")
+            return []
+
+        if not result or isinstance(result, tuple):
+            return []
+
+        faces = []
+        for key in result:
+            face_data = result[key]
+            confidence = face_data.get("score", 0)
+            if confidence < 0.9:
+                continue
+
+            facial_area = face_data.get("facial_area", [])
+            if len(facial_area) < 4:
+                continue
+
+            x1, y1, x2, y2 = [int(v) for v in facial_area[:4]]
+            bw, bh = x2 - x1, y2 - y1
+            margin_x = int(bw * self.margin_ratio)
+            margin_y = int(bh * self.margin_ratio)
+
+            x1 = max(0, x1 - margin_x)
+            y1 = max(0, y1 - margin_y)
+            x2 = min(w, x2 + margin_x)
+            y2 = min(h, y2 + margin_y)
+
+            face_crop = rgb[y1:y2, x1:x2]
+            if face_crop.size == 0:
+                continue
+
+            face_resized = cv2.resize(face_crop, face_size)
+            faces.append(face_resized)
+
+        return faces
+
+    def detect_batch(
+        self, frames: List[np.ndarray], face_size: Tuple[int, int] = (224, 224)
+    ) -> List[List[np.ndarray]]:
+        return [self.detect(f, face_size) for f in frames]
+
+
+def get_detector(detector_type: str = "mtcnn", **kwargs):
+    """Factory function to get the appropriate face detector."""
+    detector_type = detector_type.lower()
+    if detector_type == "mtcnn":
+        return MTCNNDetector(**kwargs)
+    elif detector_type == "retinaface":
+        return RetinaFaceDetector(**kwargs)
+    else:
+        raise ValueError(f"Unknown detector: {detector_type}. Choose 'mtcnn' or 'retinaface'.")
