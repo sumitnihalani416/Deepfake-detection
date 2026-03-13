@@ -1,0 +1,57 @@
+# preprocess.py
+"""
+CLI script to preprocess a raw video dataset into face crops.
+Usage:
+    python preprocess.py --input ./raw_data --output ./data/processed \
+                         --detector mtcnn --frames 30
+"""
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Preprocess deepfake dataset into face crops")
+    parser.add_argument("--input", required=True, help="Raw dataset root (with real/ and fake/ subdirs)")
+    parser.add_argument("--output", required=True, help="Output directory for face crops")
+    parser.add_argument("--detector", default="mtcnn", choices=["mtcnn", "retinaface"])
+    parser.add_argument("--frames", type=int, default=30, help="Frames to sample per video")
+    parser.add_argument("--face-size", type=int, default=224, help="Face crop size (square)")
+    parser.add_argument("--margin", type=float, default=0.3, help="Face margin ratio")
+    parser.add_argument("--sampling", default="uniform", choices=["uniform", "random"])
+    args = parser.parse_args()
+
+    if not Path(args.input).exists():
+        logger.error(f"Input path does not exist: {args.input}")
+        sys.exit(1)
+
+    logger.info(f"Initialising {args.detector.upper()} face detector…")
+    from utils.face_detector import get_detector
+    from utils.video_processor import VideoProcessor
+
+    detector = get_detector(args.detector, margin=args.margin)
+    processor = VideoProcessor(
+        face_detector=detector,
+        frames_per_video=args.frames,
+        face_size=(args.face_size, args.face_size),
+        sampling_strategy=args.sampling,
+    )
+
+    logger.info(f"Starting preprocessing: {args.input} → {args.output}")
+    stats = processor.preprocess_dataset(args.input, args.output)
+
+    logger.info("=" * 50)
+    logger.info(f"  Real face crops : {stats.get('real', 0)}")
+    logger.info(f"  Fake face crops : {stats.get('fake', 0)}")
+    logger.info(f"  No-face videos  : {stats.get('no_face', 0)}")
+    logger.info(f"  Errors          : {stats.get('errors', 0)}")
+    logger.info("Preprocessing complete!")
+
+
+if __name__ == "__main__":
+    main()
