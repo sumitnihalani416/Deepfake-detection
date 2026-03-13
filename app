@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+st.title("Deepfake detection")
 # ─── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="DeepfakeShield",
