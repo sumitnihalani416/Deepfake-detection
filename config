@@ -1,0 +1,78 @@
+# configs/config.py
+from dataclasses import dataclass, field
+from typing import Tuple, Optional
+
+
+@dataclass
+class ModelConfig:
+    """Model architecture configuration."""
+    architecture: str = "efficientnet_b4"  # Options: efficientnet_b4, xception, resnet18
+    pretrained: bool = True
+    num_classes: int = 2
+    dropout_rate: float = 0.3
+    image_size: int = 224
+
+
+@dataclass
+class TrainingConfig:
+    """Training hyperparameters."""
+    batch_size: int = 32
+    num_epochs: int = 20
+    learning_rate: float = 1e-4
+    weight_decay: float = 1e-5
+    scheduler: str = "cosine"  # Options: cosine, step, plateau
+    warmup_epochs: int = 2
+    gradient_clip: float = 1.0
+    early_stopping_patience: int = 5
+    label_smoothing: float = 0.1
+
+
+@dataclass
+class DataConfig:
+    """Dataset and preprocessing settings."""
+    dataset_root: str = "./data"
+    train_split: float = 0.7
+    val_split: float = 0.15
+    test_split: float = 0.15
+    num_workers: int = 4
+    frames_per_video: int = 30
+    face_size: Tuple[int, int] = (224, 224)
+    face_margin: float = 0.3  # Extra margin around detected face
+    min_face_confidence: float = 0.9
+
+
+@dataclass
+class FaceDetectorConfig:
+    """Face detection configuration."""
+    detector: str = "mtcnn"  # Options: mtcnn, retinaface
+    min_face_size: int = 40
+    thresholds: Tuple[float, float, float] = (0.6, 0.7, 0.8)  # MTCNN stages
+    factor: float = 0.709
+    device: str = "auto"  # auto, cpu, cuda
+
+
+@dataclass
+class InferenceConfig:
+    """Inference / prediction settings."""
+    frames_to_sample: int = 30
+    batch_size: int = 16
+    aggregation: str = "mean"  # Options: mean, max, weighted_mean
+    threshold: float = 0.5
+    temporal_smoothing: bool = True
+    smoothing_window: int = 5
+
+
+@dataclass
+class Config:
+    model: ModelConfig = field(default_factory=ModelConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    data: DataConfig = field(default_factory=DataConfig)
+    face_detector: FaceDetectorConfig = field(default_factory=FaceDetectorConfig)
+    inference: InferenceConfig = field(default_factory=InferenceConfig)
+    checkpoint_dir: str = "./checkpoints"
+    log_dir: str = "./logs"
+    seed: int = 42
+
+
+# Default configuration instance
+DEFAULT_CONFIG = Config()
