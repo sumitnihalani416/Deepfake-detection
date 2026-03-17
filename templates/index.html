@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deepfake Detection</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        #drop-area {
+            border: 2px dashed #ccc;
+            border-radius: 20px;
+            width: 100%;
+            height: 300px;
+            padding: 20px;
+            text-align: center;
+            transition: border .3s;
+            margin-bottom: 20px;
+        }
+        #drop-area.hover {
+            border-color: #333;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        #results {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: white;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Deepfake Detection Interface</h1>
+    <div id="drop-area">
+        <p>Drag and drop a video file here or click to select one.</p>
+        <input type="file" id="fileElem" accept="video/*" style="display:none;">
+        <label for="fileElem" style="cursor:pointer;">Select File</label>
+    </div>
+    <button id="uploadBtn">Upload</button>
+    <div id="results"></div>
+
+    <script>
+        const dropArea = document.getElementById('drop-area');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const resultsDiv = document.getElementById('results');
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        dropArea.addEventListener('dragover', () => dropArea.classList.add('hover'));
+        dropArea.addEventListener('dragleave', () => dropArea.classList.remove('hover'));
+        dropArea.addEventListener('drop', handleDrop);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }
+
+        uploadBtn.addEventListener('click', () => {
+            const fileInput = document.getElementById('fileElem');
+            handleFiles(fileInput.files);
+        });
+
+        function handleFiles(files) {
+            if (files.length) {
+                const file = files[0];
+                resultsDiv.innerHTML = `<p>File: ${file.name}</p>`;
+                // Here you would typically perform the upload and detection logic.
+                // For demonstration, we just simulate the result.
+                setTimeout(() => {
+                    resultsDiv.innerHTML += `<p>Result: Not a deepfake</p>`;
+                }, 2000);
+            }
+        }
+    </script>
+</body>
+</html>
